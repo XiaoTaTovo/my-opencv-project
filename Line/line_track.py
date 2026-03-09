@@ -5,7 +5,7 @@ def process_line(frame):
     roi = frame[300:480, :]
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     ret, binary = cv2.threshold(gray,100, 255, cv2.THRESH_BINARY_INV )
-    cv2.imshow("Binary View", binary)
+    # cv2.imshow("Binary View", binary)
 
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     

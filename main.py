@@ -4,10 +4,10 @@ from QRcode.recognize import process_qr
 from Serial.communicate import SerialManager
 from Line.line_track import process_line
 def main():
-    serial_manager = SerialManager(port='/dev/ttyUSB0', baudrate=115200)
+    serial_manager = SerialManager(port='COM6', baudrate=115200)
     cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,320)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT,240)
     print("📷 摄像头已启动，开始实时检测...")
     prev_frame_time=0
     last_qr_send_time=0
