@@ -1,15 +1,27 @@
 import cv2
 
 def process_line(frame):
-    # 1. 截取与预处理
-    roi = frame[300:480, :]
+    # 1. 自动获取宽高
+    h, w = frame.shape[:2] 
+    
+    # 2. 截取下半部分 ROI (忽略远处的干扰背景)
+    roi_start = int(h * 0.5)
+    roi = frame[roi_start:h, :]
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    ret, binary = cv2.threshold(gray,100, 255, cv2.THRESH_BINARY_INV )
+    
+    # ================= 【调试核心区 1】 =================
+    # 比赛现场光线变化时，优先修改这个数字！
+    threshold_value = 100 
+    # ====================================================
+    ret, binary = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY_INV)
+
+    # 强烈建议：现场调参时，解除下面这行注释。
+    # 看着弹出的黑白画面调 threshold_value，直到黑线变成完整的白块，且没有大量噪点。
     # cv2.imshow("Binary View", binary)
 
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # 2. 找最大轮廓
+    # 3. 找最大轮廓
     max_area = 0
     best_contour = None
     for cnt in contours:
@@ -18,33 +30,39 @@ def process_line(frame):
             max_area = area
             best_contour = cnt
             
-    """ # 3. 计算偏差与可视化
-    error = 0  # 设定默认偏差（防止丢线时报错） """
-    # 3. 寻找特殊特征（替代原来的计算偏差）
-    vision_cmd = 0  # 默认发送 0，代表正常，啥事没有
+    # 4. 状态判定逻辑 (准备发送给 STM32 主控的指令)
+    vision_cmd = 0       # 默认指令：正常
+    width_ratio = 0.0    # 宽度比例初始值
     
-    # 保护层1：确保真的找到了至少一个轮廓
     if best_contour is not None:
-        M = cv2.moments(best_contour)
-        # 保护层2：确保面积不为 0
-        if M["m00"] != 0:
-            cx = int(M["m10"] / M["m00"])
-            cy = int(M["m01"] / M["m00"]) # 顺便算一下 y 坐标，为了画图
+        # 面积过滤：如果最大面积太小，说明是噪点，直接当做没看到线
+        if max_area > 100: 
+            # rx, ry 是左上角坐标，rw 是宽，rh 是高
+            rx, ry, rw, rh = cv2.boundingRect(best_contour)
             
-            # error = cx - 320 # 计算真实偏差
-            # 获取这个最大轮廓的外接矩形
-            x, y, w, h = cv2.boundingRect(best_contour)
-            if(w>320):
-                vision_cmd=100
-            if(max_area<500):
-                vision_cmd=101
-            # --- 可视化部分（方便你在电脑上看效果） ---
-            # cv2.drawContours：画出找到的轮廓边界（绿色）
-            cv2.drawContours(roi, [best_contour], -1, (0, 255, 0), 2)
-            # cv2.circle：在中心点 (cx, cy) 画一个实心圆点（红色）
-            cv2.circle(roi, (cx, cy), 5, (0, 0, 255), -1) 
+            # 核心：计算当前黑色轮廓的宽度，占整个屏幕宽度的百分之多少
+            width_ratio = rw / w 
+            
+            # ================= 【调试核心区 2】 =================
+            # 比例判定：大于 0.75 (75%) 认为是遇到了特殊横线/停止线
+            if width_ratio > 0.55:
+                vision_cmd = 100
+                
+            # 在画面上画出轮廓外接矩形（蓝色），方便肉眼确认它框得准不准
+            cv2.rectangle(roi, (rx, ry), (rx+rw, ry+rh), (255, 0, 0), 2)
+        else:
+            vision_cmd = 101 # 面积太小，视为丢失目标
     else:
-         vision_cmd=101      
-    # 返回处理后的画面和算出的偏差值
-    # return frame, error
-    return frame,vision_cmd
+         vision_cmd = 101    # 没找到任何有效轮廓
+         
+    # 5. 【现场调试数据面板】（打印在画面左上角）
+    # 现场推车时，看着这几个数值变化来微调 threshold_value 和 0.75 那个判断条件
+    cv2.putText(frame, f"Thresh: {threshold_value}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    cv2.putText(frame, f"Max Area: {int(max_area)}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    cv2.putText(frame, f"W-Ratio: {width_ratio:.2f}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    
+    # 用不同的颜色显示当前下发的指令，0为绿色，其余为红色预警
+    cmd_color = (0, 255, 0) if vision_cmd == 0 else (0, 0, 255)
+    cv2.putText(frame, f"STM32 CMD: {vision_cmd}", (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.7, cmd_color, 2)
+         
+    return frame, vision_cmd
