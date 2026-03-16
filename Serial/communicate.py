@@ -36,6 +36,31 @@ class SerialManager:
         self.ser.write(packet)
         hex_str=' '.join([f'{b:02X}'for b in packet])
         print(f"发送串口数据: {hex_str}")
+    def send_line_error(self, error):
+        if self.ser is None or not self.ser.is_open:
+            return
+            
+        # 【核心修正】：因为 error 是有正负的（比如左偏 -40，右偏 +40）
+        # 我们统一加上 128。这样 0 偏差就变成 128，-40 就变成 88，+40 变成 168
+        send_val = int(error) + 128
+        
+        # 强制限制在 0-255 防止溢出报错
+        if send_val > 255:
+            send_val = 255
+        if send_val < 0:
+            send_val = 0
+            
+        header = 0xAA      # 帧头
+        cmd_type = 0x03    # 【注意】指令改成 0x03，防止和前面的路口指令 0x01 冲突！
+        data_len = 0x01    
+        checksum = (cmd_type + data_len + send_val) & 0xFF
+        tail = 0xFF
+        packet = bytes([header, cmd_type, data_len, send_val, checksum, tail])
+        self.ser.write(packet)
+        
+        # 【重要】放在树莓派跑时，一定把下面这两行 print 注释掉，终端打印极其拖慢帧率！
+        # hex_str=' '.join([f'{b:02X}'for b in packet])
+        # print(f"发送串口数据: {hex_str}")
     
     def close(self):
         if self.ser and self.ser.is_open:

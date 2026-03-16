@@ -6,96 +6,97 @@ from Line.line_track import process_line
 def main():
     serial_manager = SerialManager(port='COM6', baudrate=115200)
     cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,320)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT,240)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
     print("📷 摄像头已启动，开始实时检测...")
-    prev_frame_time=0
-    last_qr_send_time=0
-    last_line_send_time=0
-    last_vision_cmd = -1  # 🚩【新增】：用于记录上一次发送的视觉指令，初始给个不存在的值
-    frame_counter = 0  # 🚩【新增】：在 while 循环外，添加一个帧计数器
+    
+    prev_frame_time = 0  #上一帧的时间
+    last_line_send_time = 0  #线处理的时间，用于控制发送频率
+    last_vision_cmd = -1  #发给单片机的信息
+    frame_counter = 0     
+    
+    # 🚩 这个变量是决定小车生死的钥匙！
+    qr_found = False     #决定识别二维码与否 
+
     while True:
         ret, frame = cap.read()
         if not ret:
             print("获取画面失败")
             break
-        frame_counter += 1  # 🚩【新增】：每次循环，计数器加 1
-        new_frame_time=time.time()
-        fps=1/(new_frame_time-prev_frame_time)
-        prev_frame_time=new_frame_time
-        print(f"实时帧率:{int(fps)}")
+            
+        frame_counter += 1  
+        new_frame_time = time.time()
+        fps = 1 / (new_frame_time - prev_frame_time)
+        prev_frame_time = new_frame_time
+        # print(f"实时帧率:{int(fps)}") # 调试时可看，实车比赛建议注释掉省算力
 
-
-        # --- 【未来添加巡线逻辑的地方】 ---
-        # 以后你可以写一个 frame, line_error = process_line(frame)
-        # 然后把 line_error 通过串口发出去
-
-        # frame, line_error = process_line(frame)
-        # print(f"识别到误差: {line_error}")
-        # current_time = time.time()
-        # serial_manager.send_line_error(line_error)
-           
-
-
-
-
-        # ---------------------------------
-        found_texts = [] # 🚩【新增】：给它一个默认的空列表。防止跳过二维码检测时报错
-        if frame_counter % 3 == 0: 
-        # 🚩【新增】：用 if 语句包裹，取余数。如果是 3，就是每 3 帧检测一次；如果是 5，就是每 5 帧检测一次。
+        # ==========================================================
+        # 阶段 1：起跑线准备 —— 全心全意找二维码
+        # ==========================================================
+        if not qr_found:
+            # 此时车没动，我们不跑 process_line，只跑二维码识别
             frame, found_texts = process_qr(frame)
-        has_valid_qr = False  # 🚩 新增：先定一个标志位，默认没找到,确定最高优先级
-        for text in found_texts:
-            if text in ['2', '3']:
-                print(f"识别到二维码: {text}")
-                if new_frame_time - last_qr_send_time > 0.5:
-                    serial_manager.send_qr_data(text)
-                    last_qr_send_time = new_frame_time
-                has_valid_qr=True
-                break
-        if not has_valid_qr:
-            # 如果超过两秒没有发送过二维码，再处理巡线
-            if (new_frame_time - last_qr_send_time > 2):
-                frame, vision_cmd = process_line(frame)
-                
-                # 🚩 核心逻辑优化：状态一旦改变，立刻发送，保证主控第一时间响应零延迟！
-                if vision_cmd != last_vision_cmd:
-                    if vision_cmd == 0:
-                        print("✅ 恢复正常巡线")
-                    elif vision_cmd == 100:
-                        print(f"🛑 突发：识别到特殊横线: {vision_cmd}")
-                    elif vision_cmd == 101:
-                        print(f"⚠️ 突发：丢失目标！: {vision_cmd}")
-                        
-                    serial_manager.send_vision_cmd(vision_cmd)
-                    last_line_send_time = new_frame_time
-                    last_vision_cmd = vision_cmd  # 更新当前状态
+            
+            for text in found_texts:
+                if text in ['2', '3']:
+                    print(f"🎯 识别到二维码: {text}，任务启动！")
+                    serial_manager.send_qr_data(text) # 告诉单片机任务几
                     
-                # 🚩 如果状态没变（处于持续状态中），再应用你写的频率限制
-                else:
-                    if vision_cmd == 0:
-                        # 正常巡线持续中：降频到 20Hz 发送，防止撑爆 STM32 串口
-                        if new_frame_time - last_line_send_time > 0.05: 
-                            serial_manager.send_vision_cmd(vision_cmd)
-                            last_line_send_time = new_frame_time
-                            
-                    elif vision_cmd == 101:
-                        # 持续丢失目标中：10Hz 高频报警
-                        if new_frame_time - last_line_send_time > 0.1:
-                            serial_manager.send_vision_cmd(vision_cmd)
-                            last_line_send_time = new_frame_time
-                            
-                    elif vision_cmd == 100:
-                        # 持续踩在特殊横线上：2秒内绝对不重复发送，防止主控多次触发停止逻辑
-                        if new_frame_time - last_line_send_time > 2.0:
-                            serial_manager.send_vision_cmd(vision_cmd)
-                            last_line_send_time = new_frame_time
-        #到时候注释掉这四行
+                    qr_found = True # 🚩【核心】：找到了！永远关闭二维码模式！
+                    last_vision_cmd = 0 # 初始化巡线状态
+                    time.sleep(0.5) # 稍微停顿一下，让单片机消化指令
+                    break # 跳出寻找循环，进入下一帧
+                    
+        # ==========================================================
+        # 阶段 2：比赛进行中 —— 屏蔽二维码，疯狂巡线！
+        # ==========================================================
+        else:
+            # 此时二维码模块彻底休眠！所有 CPU 算力都拿来算这行代码：
+            frame, vision_cmd, line_error = process_line(frame)
+            
+            # 【动作A：发误差】高频发送！让单片机的 PID 时刻微调方向
+            serial_manager.send_line_error(line_error)
+            
+            # 【动作B：发指令】状态突变时发送！告诉单片机到了 B、C、D 点
+            if vision_cmd != last_vision_cmd:
+                # 如果状态和上一帧不一样（比如刚从正常 0 踩到横线 100）
+                if vision_cmd == 0:
+                    print("✅ 离开路口，恢复正常巡线")
+                elif vision_cmd == 100:
+                    print("🛑 突发：踩到特殊横线/顶点！通知单片机变段！")
+                elif vision_cmd == 101:
+                    print("⚠️ 突发：丢失目标！")
+                    
+                # 状态突变，必须立刻通知单片机，零延迟！
+                serial_manager.send_vision_cmd(vision_cmd)
+                last_line_send_time = new_frame_time
+                last_vision_cmd = vision_cmd  
+                
+            else:
+                # 如果状态没变（比如一直踩在横线上 100，或者一直正常 0）
+                if vision_cmd == 100:
+                    # 持续踩在横线上：必须冷却！2秒内绝对不重复发送 100！
+                    # 防止单片机的 task.c 瞬间把 B、C、D 点全跳过去了
+                    if new_frame_time - last_line_send_time > 2.0:
+                        serial_manager.send_vision_cmd(vision_cmd)
+                        last_line_send_time = new_frame_time
+                        
+                elif vision_cmd == 101:
+                    # 持续丢失中：1秒发一次 101 报警
+                    if new_frame_time - last_line_send_time > 1.0:
+                        serial_manager.send_vision_cmd(vision_cmd)
+                        last_line_send_time = new_frame_time
+                        
+                # 注意：如果 vision_cmd == 0 (正常)，且没变，我们【不发送】0。
+                # 因为正常巡线时，单片机只需要 error 就行了，没必要用 0 去塞满串口。
+
+        # ----------------------------------------------------------
+        # 画面显示 (实车比赛时，强烈建议把下面这两行也注释掉，帧率会飙升)
         cv2.imshow("Robot Vision Main", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             print("🛑 收到退出指令，正在关闭系统...")
             break
-        #没错就是到这里
+
     cap.release()
     cv2.destroyAllWindows()
     serial_manager.close()
