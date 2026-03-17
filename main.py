@@ -3,8 +3,50 @@ import time
 from QRcode.recognize import process_qr
 from Serial.communicate import SerialManager
 from Line.line_track import process_line
+import threading  # 🚩 引入多线程库
+def stm32_listener_thread(serial_manager):
+    global qr_found, stm32_running_task
+    ser = serial_manager.ser
+    
+    print("🎧 后台串口监听线程已启动...")
+    while True:
+        try:
+            # 如果串口没打开，或者缓冲区没数据，就稍微歇一下，防止 CPU 满载
+            if ser is None or not ser.is_open or ser.in_waiting < 6:
+                time.sleep(0.01)
+                continue
+                
+            # 寻找帧头 0xAA
+            if ser.read(1)[0] == 0xAA:
+                packet = ser.read(5) # 读取剩下的 5 个字节
+                
+                # 确保读全了，并且帧尾是 0xFF
+                if len(packet) == 5 and packet[4] == 0xFF:
+                    cmd_type = packet[0]
+                    data_len = packet[1]
+                    task_num = packet[2]
+                    checksum = packet[3]
+                    
+                    # 校验和比对
+                    if (cmd_type + data_len + task_num) & 0xFF == checksum:
+                        if cmd_type == 0x04: # 收到 0x04 任务指令！
+                            print(f"\n📢 [硬件通知] 收到单片机指令！目标任务: {task_num}")
+                            stm32_running_task = task_num
+                            
+                            # 如果是任务 1 或 4，直接解除二维码封印，强制进入巡线！
+                            if task_num in [1, 4]:
+                                qr_found = True
+                            elif task_num == 0:
+                                # 收到 0，说明单片机按键停车了，我们可以重置状态
+                                qr_found = False
+        except Exception as e:
+            # 遇到串口断开等错误，静默处理，不要让线程崩溃
+            time.sleep(0.1)
 def main():
-    serial_manager = SerialManager(port='COM6', baudrate=115200)
+    serial_manager = SerialManager(port='COM4', baudrate=115200)
+    # 🚩 启动后台监听线程 (daemon=True 表示主程序退出时，这个线程自动跟着死掉)
+    listener = threading.Thread(target=stm32_listener_thread, args=(serial_manager,), daemon=True)
+    listener.start()
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
@@ -28,7 +70,7 @@ def main():
         new_frame_time = time.time()
         fps = 1 / (new_frame_time - prev_frame_time)
         prev_frame_time = new_frame_time
-        # print(f"实时帧率:{int(fps)}") # 调试时可看，实车比赛建议注释掉省算力
+        print(f"实时帧率:{int(fps)}") # 调试时可看，实车比赛建议注释掉省算力
 
         # ==========================================================
         # 阶段 1：起跑线准备 —— 全心全意找二维码
@@ -36,7 +78,7 @@ def main():
         if not qr_found:
             # 此时车没动，我们不跑 process_line，只跑二维码识别
             frame, found_texts = process_qr(frame)
-            
+            # 🚩 核心修改：限定只解码 QRCODE，彻底消除警告，并极大节省 CPU 算力！
             for text in found_texts:
                 if text in ['2', '3']:
                     print(f"🎯 识别到二维码: {text}，任务启动！")
@@ -93,9 +135,16 @@ def main():
         # ----------------------------------------------------------
         # 画面显示 (实车比赛时，强烈建议把下面这两行也注释掉，帧率会飙升)
         cv2.imshow("Robot Vision Main", frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        key=cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
             print("🛑 收到退出指令，正在关闭系统...")
             break
+        # 🚩 【新增：上帝模式开关】按下键盘的 '1'，强制跳过二维码，进入巡线！
+        elif key == ord('1'): 
+            if not qr_found:
+                print("🚀 [上帝模式] 强制跳过二维码，进入纯巡线模式！(用于测试任务1)")
+                qr_found = True
+                last_vision_cmd = 0
 
     cap.release()
     cv2.destroyAllWindows()

@@ -59,8 +59,8 @@ class SerialManager:
         self.ser.write(packet)
         
         # 【重要】放在树莓派跑时，一定把下面这两行 print 注释掉，终端打印极其拖慢帧率！
-        # hex_str=' '.join([f'{b:02X}'for b in packet])
-        # print(f"发送串口数据: {hex_str}")
+        hex_str=' '.join([f'{b:02X}'for b in packet])
+        print(f"发送串口数据: {hex_str}")
     
     def close(self):
         if self.ser and self.ser.is_open:

@@ -1,7 +1,11 @@
 import cv2
 from pyzbar.pyzbar import decode
+from pyzbar.pyzbar import decode, ZBarSymbol  # 🚩 新增引入 ZBarSymbol
+
 def process_qr(frame):
-    decoded_objects = decode(frame)
+    # decoded_objects = decode(frame)
+    # 🚩 核心修改：限定只解码 QRCODE，彻底消除警告，并极大节省 CPU 算力！
+    decoded_objects = decode(frame, symbols=[ZBarSymbol.QRCODE])
     found_texts=[]
     for obj in decoded_objects:
         qr_text=obj.data.decode('utf-8')
